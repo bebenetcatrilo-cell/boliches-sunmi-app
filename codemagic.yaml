@@ -1,0 +1,31 @@
+# ============================================================================
+# CONFIGURACIÓN DE CODEMAGIC · construye el APK de Boliches Sunmi en la nube
+# Mismo método que BBNet Track: Flutter genera la estructura técnica al vuelo,
+# y encima copiamos NUESTRO código (lib/), librerías (pubspec.yaml) y permisos.
+# ============================================================================
+
+workflows:
+  android-workflow:
+    name: Boliches Sunmi Android
+    max_build_duration: 60
+    environment:
+      flutter: 3.32.0
+    scripts:
+      - name: Generar la estructura base de Android (la parte técnica)
+        script: |
+          cd ..
+          flutter create --org com.boliches --project-name boliches_sunmi base_temporal
+          cp -r $CM_BUILD_DIR/lib/* base_temporal/lib/
+          cp $CM_BUILD_DIR/pubspec.yaml base_temporal/pubspec.yaml
+          cp $CM_BUILD_DIR/android/app/src/main/AndroidManifest.xml base_temporal/android/app/src/main/AndroidManifest.xml
+          cp -r $CM_BUILD_DIR/android/app/src/main/res/mipmap-* base_temporal/android/app/src/main/res/
+      - name: Bajar las librerías
+        script: |
+          cd ../base_temporal
+          flutter pub get
+      - name: Construir el APK
+        script: |
+          cd ../base_temporal
+          flutter build apk --release
+    artifacts:
+      - ../base_temporal/build/**/outputs/**/*.apk
