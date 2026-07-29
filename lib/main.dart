@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:sunmi_printer_plus/sunmi_printer_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -172,10 +173,12 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _timer;
   bool _ocupado = false;
   final List<String> _logs = [];
+  Uint8List? _logoBytes; // logo del ticket (mismo que las Epson, guardado en Supabase)
 
   @override
   void initState() {
     super.initState();
+    _cargarLogo();
     _web = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
@@ -203,6 +206,33 @@ class _MainScreenState extends State<MainScreen> {
       _logs.insert(0, '${fechaAhora().substring(11)}  $m');
       if (_logs.length > 60) _logs.removeLast();
     });
+  }
+
+  // Baja el logo del sistema (tabla config, clave 'logo') = el mismo de las Epson
+  Future<void> _cargarLogo() async {
+    try {
+      final r = await supabase.from('config').select('valor').eq('clave', 'logo').maybeSingle();
+      final dataUrl = (r?['valor'] ?? '').toString();
+      if (dataUrl.contains(',')) {
+        _logoBytes = base64Decode(dataUrl.split(',').last);
+        _log('Logo cargado del sistema');
+      } else {
+        _log('Sin logo: uso texto WIKEND');
+      }
+    } catch (e) {
+      _log('No se pudo cargar el logo: $e');
+    }
+  }
+
+  // Imprime el logo arriba del ticket; si falla, cae al texto WIKEND
+  Future<void> _printHeaderLogo() async {
+    if (_logoBytes != null) {
+      try {
+        await SunmiPrinter.printImage(_logoBytes!);
+        return;
+      } catch (_) {}
+    }
+    await SunmiPrinter.printText(boliche, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
   }
 
   Future<void> _revisarCola() async {
@@ -258,7 +288,7 @@ class _MainScreenState extends State<MainScreen> {
     for (int i = 0; i < tks.length; i++) {
       final v = tks[i] as Map;
       acum += (v['precio'] is num) ? v['precio'] : (num.tryParse(v['precio'].toString()) ?? 0);
-      await SunmiPrinter.printText(boliche, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
+      await _printHeaderLogo();
       if (evento.isNotEmpty) {
         await SunmiPrinter.printText(evento, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 22));
       }
@@ -275,13 +305,17 @@ class _MainScreenState extends State<MainScreen> {
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
       await SunmiPrinter.printText(lr('Acumulado', money(acum)), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
       await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.lineWrap(3);
-      await SunmiPrinter.cutPaper();
+      await SunmiPrinter.lineWrap(1);
+      // Linea de corte a mano bien marcada (la Sunmi de 57mm no corta sola)
+      await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
+          style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
+      await SunmiPrinter.lineWrap(2);
+      await SunmiPrinter.cutPaper(); // corte real si el aparato lo soporta
     }
   }
 
   Future<void> _printReporte(Map payload) async {
-    await SunmiPrinter.printText(boliche, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
+    await _printHeaderLogo();
     await SunmiPrinter.printText('REPORTE', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 30));
     final titulo = (payload['titulo'] ?? '').toString();
     final sub = (payload['sub'] ?? '').toString();
