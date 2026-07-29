@@ -1,7 +1,7 @@
 // ============================================================================
-// BOLICHES SUNMI · Agente de impresion en el propio aparato
-// PASO 2: lee la cola (impresiones) de su estacion e imprime en la Sunmi.
-// Tipos soportados: venta de barra + reporte.
+// BOLICHES SUNMI · Caja + Impresora todo en uno
+// PASO 3: WebView (abre el sistema) + agente de impresion por atras.
+// La impresion del navegador queda anulada; todo imprime por el agente.
 // ============================================================================
 
 import 'dart:async';
@@ -10,11 +10,13 @@ import 'package:flutter/material.dart';
 import 'package:sunmi_printer_plus/sunmi_printer_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 const supabaseUrl = 'https://gakgvcsksskzemzomhkp.supabase.co';
 const supabaseAnonKey =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdha2d2Y3Nrc3NremVtem9taGtwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3OTYxNjksImV4cCI6MjA5NzM3MjE2OX0.vtG6HJQK4HAbqwF2h4WRK-3-M-FLTa4Tv_1AkgTKkJs';
 
+const sistemaUrl = 'https://boliches.bbnetsystem.com';
 const boliche = 'WIKEND';
 const divisor = '--------------------------------';
 
@@ -57,7 +59,7 @@ class BolichesApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Boliches Sunmi',
+      title: 'Boliches Soft',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.pink, scaffoldBackgroundColor: const Color(0xFF14121A)),
       home: const Arranque(),
@@ -85,7 +87,7 @@ class _ArranqueState extends State<Arranque> {
     if (est.isEmpty) {
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfigScreen()));
     } else {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => AgenteScreen(estacion: est)));
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainScreen(estacion: est)));
     }
   }
 
@@ -111,7 +113,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('estacion', est);
     if (!mounted) return;
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => AgenteScreen(estacion: est)));
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainScreen(estacion: est)));
   }
 
   @override
@@ -158,14 +160,15 @@ class _ConfigScreenState extends State<ConfigScreen> {
   }
 }
 
-class AgenteScreen extends StatefulWidget {
+class MainScreen extends StatefulWidget {
   final String estacion;
-  const AgenteScreen({super.key, required this.estacion});
+  const MainScreen({super.key, required this.estacion});
   @override
-  State<AgenteScreen> createState() => _AgenteScreenState();
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-class _AgenteScreenState extends State<AgenteScreen> {
+class _MainScreenState extends State<MainScreen> {
+  late final WebViewController _web;
   Timer? _timer;
   bool _ocupado = false;
   final List<String> _logs = [];
@@ -173,7 +176,17 @@ class _AgenteScreenState extends State<AgenteScreen> {
   @override
   void initState() {
     super.initState();
-    _log('Escuchando estación ${widget.estacion}...');
+    _web = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (u) {
+          // Anula la impresion del navegador: todo imprime por el agente
+          _web.runJavaScript('window.print = function(){};');
+        },
+      ))
+      ..loadRequest(Uri.parse(sistemaUrl));
+
+    _log('Escuchando estación ${widget.estacion}');
     _timer = Timer.periodic(const Duration(milliseconds: 2500), (_) => _revisarCola());
     _revisarCola();
   }
@@ -313,38 +326,69 @@ class _AgenteScreenState extends State<AgenteScreen> {
     Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfigScreen()));
   }
 
+  void _abrirMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1B1922),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Estación: ${widget.estacion}',
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            const Text('El agente está activo e imprimiendo.', style: TextStyle(color: Colors.greenAccent, fontSize: 13)),
+            const Divider(color: Colors.white24),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () { Navigator.pop(context); _pruebaImpresion(); },
+                  icon: const Icon(Icons.receipt_long),
+                  label: const Text('Prueba'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () { Navigator.pop(context); _web.reload(); },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Recargar'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () { Navigator.pop(context); _cambiarEstacion(); },
+                  icon: const Icon(Icons.settings),
+                  label: const Text('Cambiar estación'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('Últimas impresiones:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 160,
+              child: ListView.builder(
+                itemCount: _logs.length,
+                itemBuilder: (_, i) => Text(_logs[i], style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Imprimiendo · ${widget.estacion}'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(onPressed: _pruebaImpresion, icon: const Icon(Icons.receipt_long), tooltip: 'Prueba'),
-          IconButton(onPressed: _cambiarEstacion, icon: const Icon(Icons.settings), tooltip: 'Cambiar estación'),
-        ],
+      body: SafeArea(child: WebViewWidget(controller: _web)),
+      floatingActionButton: FloatingActionButton(
+        mini: true,
+        backgroundColor: const Color(0xFFFF2E88),
+        onPressed: _abrirMenu,
+        child: const Icon(Icons.print),
       ),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            color: const Color(0xFF1B7F4B),
-            child: Text('● Activo · escuchando "${widget.estacion}"',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _logs.length,
-              itemBuilder: (_, i) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Text(_logs[i], style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              ),
-            ),
-          ),
-        ],
-      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }

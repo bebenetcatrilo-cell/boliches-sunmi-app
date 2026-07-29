@@ -1,13 +1,12 @@
-# Boliches Sunmi
+# Boliches Soft · Sunmi (Caja + Impresora)
 
-App de impresion para Boliches Soft en aparatos Sunmi/Baiwang (Android).
+App todo-en-uno para aparatos Sunmi/Baiwang (Android):
+- Abre el sistema Boliches Soft adentro (WebView) = CAJA + ADMIN + REPORTES.
+- Un agente por atras lee la cola (tabla `impresiones`) de SU estacion e
+  imprime en la impresora interna del Sunmi (venta de barra + reportes).
+- La impresion del navegador queda anulada: todo sale por el agente.
 
-**PASO 2 (actual):** la app lee la cola de impresion (tabla `impresiones`)
-de SU estacion e imprime en la impresora interna del Sunmi.
-Soporta: venta de barra + reportes.
-
-- Primera vez: pide el NOMBRE de la estacion (ej: SUNMI 1) y lo guarda.
-- Despues arranca solo y escucha esa estacion.
-- Boton de prueba y boton para cambiar la estacion arriba a la derecha.
+Primera vez: pide el nombre de la estacion (ej: SUNMI 1) y lo guarda.
+Boton flotante rosa (abajo derecha) = menu: prueba, recargar, cambiar estacion.
 
 Compila con Codemagic (workflow "Boliches Sunmi Android").

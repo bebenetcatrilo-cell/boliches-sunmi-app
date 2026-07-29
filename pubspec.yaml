@@ -1,5 +1,5 @@
 name: boliches_sunmi
-description: App de impresion Sunmi para Boliches Soft
+description: App Boliches Soft para Sunmi (caja + impresora)
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,12 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # Impresion en la impresora interna del Sunmi
   sunmi_printer_plus: ^4.1.1
-  # Conexion a Supabase (la misma que usa BBNet Track, version probada)
   supabase_flutter: ^2.5.0
-  # Guardar la estacion elegida en el aparato
   shared_preferences: ^2.2.0
+  webview_flutter: ^4.7.0
 
 flutter:
   uses-material-design: true
