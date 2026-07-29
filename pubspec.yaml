@@ -11,6 +11,10 @@ dependencies:
     sdk: flutter
   # Impresion en la impresora interna del Sunmi
   sunmi_printer_plus: ^4.1.1
+  # Conexion a Supabase (la misma que usa BBNet Track, version probada)
+  supabase_flutter: ^2.5.0
+  # Guardar la estacion elegida en el aparato
+  shared_preferences: ^2.2.0
 
 flutter:
   uses-material-design: true
