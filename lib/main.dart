@@ -331,7 +331,7 @@ class _MainScreenState extends State<MainScreen> {
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
       await SunmiPrinter.printText(lr('Acumulado', money(acum)), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
       await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.lineWrap(3);
+      await SunmiPrinter.lineWrap(9);
       // Linea de corte a mano bien marcada (la Sunmi de 57mm no corta sola)
       await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
