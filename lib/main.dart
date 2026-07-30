@@ -231,12 +231,17 @@ class _MainScreenState extends State<MainScreen> {
       }
       final b64 = valor.contains(',') ? valor.split(',').last : valor;
       _logoBytes = base64Decode(b64);
-      // Achicar el logo a un ancho modesto (parecido al texto WIKEND, no gigante)
+      // Achicar y CENTRAR el logo: lo pego centrado sobre un lienzo blanco
+      // del ancho del papel (384px = 57mm), asi sale siempre en el medio.
       try {
         final decoded = img.decodeImage(_logoBytes!);
         if (decoded != null) {
-          final resized = img.copyResize(decoded, width: 220);
-          _logoBytes = Uint8List.fromList(img.encodePng(resized));
+          final logo = img.copyResize(decoded, width: 220);
+          final canvas = img.Image(width: 384, height: logo.height);
+          img.fill(canvas, color: img.ColorRgb8(255, 255, 255));
+          final dx = ((384 - logo.width) / 2).round();
+          img.compositeImage(canvas, logo, dstX: dx, dstY: 0);
+          _logoBytes = Uint8List.fromList(img.encodePng(canvas));
         }
       } catch (_) {}
       _log('Logo cargado (${_logoBytes!.length} bytes)');
@@ -311,7 +316,7 @@ class _MainScreenState extends State<MainScreen> {
       acum += (v['precio'] is num) ? v['precio'] : (num.tryParse(v['precio'].toString()) ?? 0);
       await _printHeaderLogo();
       if (evento.isNotEmpty) {
-        await SunmiPrinter.printText(evento, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 22));
+        await SunmiPrinter.printText(evento, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 26));
       }
       if (barra.isNotEmpty) {
         await SunmiPrinter.printText(barra, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 24));
@@ -320,13 +325,13 @@ class _MainScreenState extends State<MainScreen> {
         await SunmiPrinter.printText('CAJA: ${cajero.toUpperCase()}', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 28));
       }
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.printText('N ${v['numero'] ?? ''}   ${i + 1}/$total', style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 22));
-      await SunmiPrinter.printText((v['nombre'] ?? '').toString(), style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 34));
+      await SunmiPrinter.printText('N ${v['numero'] ?? ''}   ${i + 1}/$total', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 28));
+      await SunmiPrinter.printText((v['nombre'] ?? '').toString(), style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 38));
       await SunmiPrinter.printText(money(v['precio']), style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
       await SunmiPrinter.printText(lr('Acumulado', money(acum)), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
       await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.lineWrap(2);
+      await SunmiPrinter.lineWrap(3);
       // Linea de corte a mano bien marcada (la Sunmi de 57mm no corta sola)
       await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
