@@ -212,13 +212,15 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _cargarLogo() async {
     try {
       final r = await supabase.from('config').select('valor').eq('clave', 'logo').maybeSingle();
-      final dataUrl = (r?['valor'] ?? '').toString();
-      if (dataUrl.contains(',')) {
-        _logoBytes = base64Decode(dataUrl.split(',').last);
-        _log('Logo cargado del sistema');
-      } else {
-        _log('Sin logo: uso texto WIKEND');
+      final valor = (r?['valor'] ?? '').toString().trim();
+      if (valor.isEmpty) {
+        _log('Sin logo en config: uso texto WIKEND');
+        return;
       }
+      // Acepta "data:image/png;base64,XXXX" o base64 crudo "XXXX"
+      final b64 = valor.contains(',') ? valor.split(',').last : valor;
+      _logoBytes = base64Decode(b64);
+      _log('Logo cargado (${_logoBytes!.length} bytes)');
     } catch (e) {
       _log('No se pudo cargar el logo: $e');
     }
@@ -305,11 +307,11 @@ class _MainScreenState extends State<MainScreen> {
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
       await SunmiPrinter.printText(lr('Acumulado', money(acum)), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
       await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.lineWrap(1);
+      await SunmiPrinter.lineWrap(2);
       // Linea de corte a mano bien marcada (la Sunmi de 57mm no corta sola)
       await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
-      await SunmiPrinter.lineWrap(2);
+      await SunmiPrinter.lineWrap(4);
       await SunmiPrinter.cutPaper(); // corte real si el aparato lo soporta
     }
   }
