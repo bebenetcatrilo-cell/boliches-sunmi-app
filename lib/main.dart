@@ -12,6 +12,7 @@ import 'package:sunmi_printer_plus/sunmi_printer_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:image/image.dart' as img;
 
 const supabaseUrl = 'https://gakgvcsksskzemzomhkp.supabase.co';
 const supabaseAnonKey =
@@ -20,6 +21,10 @@ const supabaseAnonKey =
 const sistemaUrl = 'https://boliches.bbnetsystem.com';
 const boliche = 'WIKEND';
 const divisor = '--------------------------------';
+
+// Usuario de servicio para leer la config (logo). Igual que el agente Epson.
+const terminalEmail = 'terminal@wikend.com';
+const terminalPass = 'terminal123';
 
 late final SupabaseClient supabase;
 
@@ -208,18 +213,32 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  // Baja el logo del sistema (tabla config, clave 'logo') = el mismo de las Epson
+  // Baja el logo del sistema (tabla config, clave 'logo') = el mismo de las Epson.
+  // La tabla config es privada: primero nos logueamos con terminal@wikend.com.
   Future<void> _cargarLogo() async {
     try {
+      try {
+        await supabase.auth.signInWithPassword(email: terminalEmail, password: terminalPass);
+        _log('Login OK (terminal)');
+      } catch (e) {
+        _log('No pude loguear para el logo: $e');
+      }
       final r = await supabase.from('config').select('valor').eq('clave', 'logo').maybeSingle();
       final valor = (r?['valor'] ?? '').toString().trim();
       if (valor.isEmpty) {
         _log('Sin logo en config: uso texto WIKEND');
         return;
       }
-      // Acepta "data:image/png;base64,XXXX" o base64 crudo "XXXX"
       final b64 = valor.contains(',') ? valor.split(',').last : valor;
       _logoBytes = base64Decode(b64);
+      // Achicar el logo a un ancho modesto (parecido al texto WIKEND, no gigante)
+      try {
+        final decoded = img.decodeImage(_logoBytes!);
+        if (decoded != null) {
+          final resized = img.copyResize(decoded, width: 220);
+          _logoBytes = Uint8List.fromList(img.encodePng(resized));
+        }
+      } catch (_) {}
       _log('Logo cargado (${_logoBytes!.length} bytes)');
     } catch (e) {
       _log('No se pudo cargar el logo: $e');
@@ -311,7 +330,7 @@ class _MainScreenState extends State<MainScreen> {
       // Linea de corte a mano bien marcada (la Sunmi de 57mm no corta sola)
       await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
-      await SunmiPrinter.lineWrap(4);
+      await SunmiPrinter.lineWrap(8);
       await SunmiPrinter.cutPaper(); // corte real si el aparato lo soporta
     }
   }
