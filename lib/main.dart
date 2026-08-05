@@ -12,6 +12,8 @@ import 'package:sunmi_printer_plus/sunmi_printer_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:image/image.dart' as img;
 
 const supabaseUrl = 'https://gakgvcsksskzemzomhkp.supabase.co';
@@ -184,6 +186,7 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _cargarLogo();
+    Permission.camera.request(); // permiso de camara para escanear QR
     _web = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
@@ -193,6 +196,14 @@ class _MainScreenState extends State<MainScreen> {
         },
       ))
       ..loadRequest(Uri.parse(sistemaUrl));
+
+    // Autorizar al WebView a usar la camara (si no, crashea al escanear)
+    final plat = _web.platform;
+    if (plat is AndroidWebViewController) {
+      plat.setOnPlatformPermissionRequest((request) {
+        request.grant();
+      });
+    }
 
     _log('Escuchando estación ${widget.estacion}');
     _timer = Timer.periodic(const Duration(milliseconds: 2500), (_) => _revisarCola());
