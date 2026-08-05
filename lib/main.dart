@@ -292,6 +292,8 @@ class _MainScreenState extends State<MainScreen> {
         final kind = (payload['kind'] ?? '').toString();
         if (kind == 'reporte') {
           await _printReporte(payload as Map);
+        } else if (kind == 'entrada_qr' || kind == 'consumicion_qr') {
+          await _printEntrada(payload as Map, kind);
         } else {
           await _printVenta(payload as Map);
         }
@@ -337,6 +339,29 @@ class _MainScreenState extends State<MainScreen> {
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
       await SunmiPrinter.lineWrap(8);
       await SunmiPrinter.cutPaper(); // corte real si el aparato lo soporta
+    }
+  }
+
+  Future<void> _printEntrada(Map payload, String kind) async {
+    final evento = (payload['evento'] ?? '').toString();
+    final tks = (payload['tks'] as List?) ?? [];
+    final titulo = kind == 'consumicion_qr' ? 'CONSUMICION' : 'INGRESO';
+    for (final x in tks) {
+      final v = x as Map;
+      await _printHeaderLogo();
+      await SunmiPrinter.printText(titulo, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
+      if (evento.isNotEmpty) {
+        await SunmiPrinter.printText(evento, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 26));
+      }
+      await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+      await SunmiPrinter.printText((v['nombre'] ?? '').toString(), style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 34));
+      await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+      await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+      await SunmiPrinter.lineWrap(9);
+      await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
+          style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
+      await SunmiPrinter.lineWrap(8);
+      await SunmiPrinter.cutPaper();
     }
   }
 
