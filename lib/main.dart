@@ -13,6 +13,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 
 const supabaseUrl = 'https://gakgvcsksskzemzomhkp.supabase.co';
@@ -437,6 +439,15 @@ class _MainScreenState extends State<MainScreen> {
               runSpacing: 10,
               children: [
                 ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => ScannerTarjetaScreen(estacion: widget.estacion)));
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF2E88), foregroundColor: Colors.white),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Escanear tarjetas'),
+                ),
+                ElevatedButton.icon(
                   onPressed: () { Navigator.pop(context); _pruebaImpresion(); },
                   icon: const Icon(Icons.receipt_long),
                   label: const Text('Prueba'),
@@ -480,6 +491,174 @@ class _MainScreenState extends State<MainScreen> {
         child: const Icon(Icons.print),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+    );
+  }
+}
+
+// ============================================================================
+//  Escaner NATIVO de tarjetas (no usa el WebView, no crashea en el Sunmi)
+//  Lee el QR, valida con marcar_ingreso_tarjeta, muestra verde/rojo,
+//  beep/vibra e imprime el ticket de ingreso (via la cola de su estacion).
+// ============================================================================
+class ScannerTarjetaScreen extends StatefulWidget {
+  final String estacion;
+  const ScannerTarjetaScreen({super.key, required this.estacion});
+  @override
+  State<ScannerTarjetaScreen> createState() => _ScannerTarjetaScreenState();
+}
+
+class _ScannerTarjetaScreenState extends State<ScannerTarjetaScreen> {
+  String? _nocheId;
+  bool _busy = false;
+  String _lastCode = '';
+  int _lastT = 0;
+  String _resTipo = ''; // ok | err | ''
+  String _resMsg = 'Acercá una tarjeta';
+  String _resSub = '';
+  int _contador = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarNoche();
+  }
+
+  Future<void> _cargarNoche() async {
+    try {
+      final r = await supabase.from('noches').select('id').eq('estado', 'abierta').order('id', ascending: false).limit(1).maybeSingle();
+      if (r != null) _nocheId = r['id'].toString();
+    } catch (_) {}
+    if (_nocheId == null && mounted) {
+      setState(() { _resTipo = 'err'; _resMsg = 'No hay noche abierta'; });
+    }
+  }
+
+  Future<void> _onDetect(BarcodeCapture cap) async {
+    if (_busy) return;
+    final raw = cap.barcodes.isNotEmpty ? (cap.barcodes.first.rawValue ?? '') : '';
+    if (raw.isEmpty) return;
+    final code = raw.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    if (code.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (code == _lastCode && now - _lastT < 3500) return;
+    _lastCode = code; _lastT = now;
+    if (_nocheId == null) { await _cargarNoche(); if (_nocheId == null) return; }
+    _busy = true;
+    try {
+      final res = await supabase.rpc('marcar_ingreso_tarjeta', params: {'p_qr': code, 'p_noche_id': _nocheId});
+      final m = (res is Map) ? res : <String, dynamic>{};
+      if (m['ok'] == true) {
+        _contador++;
+        SystemSound.play(SystemSoundType.alert);
+        HapticFeedback.mediumImpact();
+        setState(() { _resTipo = 'ok'; _resMsg = 'INGRESO OK'; _resSub = (m['titular'] ?? '').toString(); });
+        await _enqueuePrint((m['titular'] ?? '').toString());
+      } else if (m['ya'] == true) {
+        HapticFeedback.heavyImpact();
+        String hora = '';
+        final used = m['used_at']?.toString();
+        if (used != null && used.isNotEmpty) {
+          try {
+            final d = DateTime.parse(used).toLocal();
+            String dd(int n) => n.toString().padLeft(2, '0');
+            hora = '${dd(d.hour)}:${dd(d.minute)}';
+          } catch (_) {}
+        }
+        setState(() {
+          _resTipo = 'err';
+          _resMsg = 'YA INGRESÓ';
+          _resSub = (m['titular'] ?? '').toString() + (hora.isNotEmpty ? '  ·  entró $hora' : '');
+        });
+      } else {
+        HapticFeedback.heavyImpact();
+        setState(() { _resTipo = 'err'; _resMsg = (m['msg'] ?? 'No válido').toString(); _resSub = ''; });
+      }
+    } catch (e) {
+      setState(() { _resTipo = 'err'; _resMsg = 'Error de conexión'; _resSub = ''; });
+    } finally {
+      await Future.delayed(const Duration(milliseconds: 1000));
+      _busy = false;
+    }
+  }
+
+  Future<void> _enqueuePrint(String titular) async {
+    try {
+      await supabase.from('impresiones').insert({
+        'tipo': 'ticket',
+        'estado': 'pendiente',
+        'estacion': widget.estacion,
+        'payload': {
+          'kind': 'entrada_qr',
+          'evento': '',
+          'tks': [
+            {'numero': 'FREE', 'nombre': 'INGRESO · $titular', 'precio': 0}
+          ]
+        }
+      });
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color col = _resTipo == 'ok'
+        ? const Color(0xFF1B7F4B)
+        : _resTipo == 'err'
+            ? const Color(0xFFB3261E)
+            : const Color(0xCC000000);
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          MobileScanner(onDetect: _onDetect),
+          // Marco guía
+          Center(
+            child: Container(
+              width: 230,
+              height: 230,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white70, width: 3),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          // Resultado abajo
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: Container(
+              color: col,
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 34),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _resTipo == 'ok' ? '✅ $_resMsg' : _resTipo == 'err' ? '⛔ $_resMsg' : _resMsg,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold),
+                  ),
+                  if (_resSub.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(_resSub, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                  ],
+                  const SizedBox(height: 10),
+                  Text('Ingresos en esta sesión: $_contador', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+          // Cerrar
+          Positioned(
+            top: 40, left: 10,
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white, size: 30),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          Positioned(
+            top: 46, right: 16,
+            child: Text('Estación ${widget.estacion}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+        ],
+      ),
     );
   }
 }
