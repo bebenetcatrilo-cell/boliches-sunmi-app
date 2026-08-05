@@ -13,7 +13,6 @@ dependencies:
   supabase_flutter: ^2.5.0
   shared_preferences: ^2.2.0
   webview_flutter: ^4.7.0
-  webview_flutter_android: ^3.16.0
   permission_handler: ^11.3.0
   image: ^4.1.7
 
