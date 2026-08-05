@@ -198,6 +198,8 @@ class _MainScreenState extends State<MainScreen> {
         onPageFinished: (u) {
           // Anula la impresion del navegador: todo imprime por el agente
           _web.runJavaScript('window.print = function(){};');
+          // Le avisa al sistema web cual es la estacion de este Sunmi
+          _web.runJavaScript("try{window.SUNMI_ESTACION='${widget.estacion}';localStorage.setItem('sunmi_estacion','${widget.estacion}');if(window.aplicarEstacionSunmi)window.aplicarEstacionSunmi('${widget.estacion}');}catch(e){}");
         },
       ))
       ..loadRequest(Uri.parse(sistemaUrl));
