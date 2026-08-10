@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:sunmi_printer_plus/sunmi_printer_plus.dart';
@@ -182,10 +183,23 @@ class _MainScreenState extends State<MainScreen> {
   bool _ocupado = false;
   final List<String> _logs = [];
   Uint8List? _logoBytes; // logo del ticket (mismo que las Epson, guardado en Supabase)
+  String _hasarIp = '';   // IP de la Hasar de red (vacío = imprime en la interna del Sunmi)
+  int _hasarPort = 9100;
+  bool get _redMode => _hasarIp.trim().isNotEmpty;
+
+  Future<void> _cargarConfigRed() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _hasarIp = prefs.getString('hasar_ip') ?? '';
+      _hasarPort = prefs.getInt('hasar_port') ?? 9100;
+    });
+    if (_redMode) _log('Impresión por RED activada: $_hasarIp:$_hasarPort');
+  }
 
   @override
   void initState() {
     super.initState();
+    _cargarConfigRed();
     _cargarLogo();
     Permission.camera.request(); // permiso de camara para escanear QR
     _web = WebViewController(
@@ -316,7 +330,125 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  // ====== IMPRESIÓN POR RED (Hasar/Epson por IP, corta sola) ======
+  Future<void> _enviarRed(List<int> bytes) async {
+    Socket? s;
+    try {
+      s = await Socket.connect(_hasarIp, _hasarPort, timeout: const Duration(seconds: 5));
+      s.add(bytes);
+      await s.flush();
+      await Future.delayed(const Duration(milliseconds: 400));
+      _log('🖨 Enviado a Hasar $_hasarIp');
+    } catch (e) {
+      _log('❌ Error impresión red: $e');
+    } finally {
+      try { await s?.close(); } catch (_) {}
+    }
+  }
+
+  // Helpers ESC/POS
+  List<int> _eText(String s) {
+    final limpio = s
+        .replaceAll('á', 'a').replaceAll('é', 'e').replaceAll('í', 'i')
+        .replaceAll('ó', 'o').replaceAll('ú', 'u').replaceAll('ñ', 'n')
+        .replaceAll('Á', 'A').replaceAll('É', 'E').replaceAll('Í', 'I')
+        .replaceAll('Ó', 'O').replaceAll('Ú', 'U').replaceAll('Ñ', 'N');
+    return [...latin1.encode(limpio), 0x0A];
+  }
+  List<int> _eLine(String s, {int size = 0, bool bold = false, int align = 1}) {
+    final b = <int>[];
+    b.addAll([0x1B, 0x61, align]); // align: 0 izq, 1 centro, 2 der
+    if (bold) b.addAll([0x1B, 0x45, 1]);
+    if (size != 0) b.addAll([0x1D, 0x21, size == 2 ? 0x11 : 0x01]);
+    b.addAll(_eText(s));
+    if (size != 0) b.addAll([0x1D, 0x21, 0x00]);
+    if (bold) b.addAll([0x1B, 0x45, 0]);
+    return b;
+  }
+  List<int> _eFeed(int n) => [0x1B, 0x64, n];
+  List<int> _eCut() => [0x1D, 0x56, 66, 0]; // corte parcial con avance
+
+  List<int> _escposVenta(Map payload) {
+    final tks = (payload['tks'] as List?) ?? [];
+    final barra = (payload['barra'] ?? '').toString();
+    final evento = (payload['evento'] ?? '').toString();
+    final cajero = (payload['cajero'] ?? '').toString();
+    final total = tks.length;
+    num acum = 0;
+    final b = <int>[];
+    for (int i = 0; i < tks.length; i++) {
+      final v = tks[i] as Map;
+      acum += (v['precio'] is num) ? v['precio'] : (num.tryParse(v['precio'].toString()) ?? 0);
+      b.addAll([0x1B, 0x40]);
+      b.addAll(_eLine('WIKEND', size: 2, bold: true));
+      if (evento.isNotEmpty) b.addAll(_eLine(evento, size: 1, bold: true));
+      if (barra.isNotEmpty) b.addAll(_eLine(barra, size: 1));
+      if (cajero.isNotEmpty) b.addAll(_eLine('CAJA: ${cajero.toUpperCase()}', size: 1, bold: true));
+      b.addAll(_eLine(divisor));
+      b.addAll(_eLine('N ${v['numero'] ?? ''}   ${i + 1}/$total', size: 1, bold: true));
+      b.addAll(_eLine((v['nombre'] ?? '').toString(), size: 2, bold: true));
+      b.addAll(_eLine(money(v['precio']), size: 2, bold: true));
+      b.addAll(_eLine(divisor));
+      b.addAll(_eLine(lr('Acumulado', money(acum)), align: 0));
+      b.addAll(_eLine(fechaAhora()));
+      b.addAll(_eFeed(2));
+      b.addAll(_eCut());
+    }
+    return b;
+  }
+
+  List<int> _escposEntrada(Map payload, String kind) {
+    final evento = (payload['evento'] ?? '').toString();
+    final tks = (payload['tks'] as List?) ?? [];
+    final titulo = kind == 'consumicion_qr' ? 'CONSUMICION' : 'INGRESO';
+    final b = <int>[];
+    for (final x in tks) {
+      final v = x as Map;
+      b.addAll([0x1B, 0x40]);
+      b.addAll(_eLine('WIKEND', size: 2, bold: true));
+      b.addAll(_eLine(titulo, size: 2, bold: true));
+      if (evento.isNotEmpty) b.addAll(_eLine(evento, size: 1, bold: true));
+      b.addAll(_eLine(divisor));
+      final numTxt = (v['numero'] ?? '').toString();
+      if (numTxt.isNotEmpty) b.addAll(_eLine(numTxt, size: 2, bold: true));
+      b.addAll(_eLine((v['nombre'] ?? '').toString(), size: 1, bold: true));
+      b.addAll(_eLine(divisor));
+      b.addAll(_eLine(fechaAhora()));
+      b.addAll(_eFeed(2));
+      b.addAll(_eCut());
+    }
+    return b;
+  }
+
+  List<int> _escposReporte(Map payload) {
+    final b = <int>[];
+    b.addAll([0x1B, 0x40]);
+    b.addAll(_eLine('WIKEND', size: 2, bold: true));
+    b.addAll(_eLine('REPORTE', size: 1, bold: true));
+    final titulo = (payload['titulo'] ?? '').toString();
+    final sub = (payload['sub'] ?? '').toString();
+    if (titulo.isNotEmpty) b.addAll(_eLine(titulo));
+    if (sub.isNotEmpty) b.addAll(_eLine(sub));
+    b.addAll(_eLine(divisor));
+    final lineas = (payload['lineas'] as List?) ?? [];
+    for (final x in lineas) {
+      final m = x as Map;
+      if (m['sep'] == true) {
+        b.addAll(_eLine(divisor));
+      } else if (m['h'] != null) {
+        b.addAll(_eLine(m['h'].toString(), bold: true));
+      } else {
+        b.addAll(_eLine(lr(_clean(m['l']), _clean(m['v'])), align: 0));
+      }
+    }
+    b.addAll(_eLine(fechaAhora()));
+    b.addAll(_eFeed(2));
+    b.addAll(_eCut());
+    return b;
+  }
+
   Future<void> _printVenta(Map payload) async {
+    if (_redMode) { await _enviarRed(_escposVenta(payload)); return; }
     final tks = (payload['tks'] as List?) ?? [];
     final barra = (payload['barra'] ?? '').toString();
     final evento = (payload['evento'] ?? '').toString();
@@ -353,6 +485,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _printEntrada(Map payload, String kind) async {
+    if (_redMode) { await _enviarRed(_escposEntrada(payload, kind)); return; }
     final evento = (payload['evento'] ?? '').toString();
     final tks = (payload['tks'] as List?) ?? [];
     final titulo = kind == 'consumicion_qr' ? 'CONSUMICION' : 'INGRESO';
@@ -364,10 +497,14 @@ class _MainScreenState extends State<MainScreen> {
         await SunmiPrinter.printText(evento, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 26));
       }
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+      final numTxt = (v['numero'] ?? '').toString();
+      if (numTxt.isNotEmpty) {
+        await SunmiPrinter.printText(numTxt, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
+      }
       await SunmiPrinter.printText((v['nombre'] ?? '').toString(), style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 34));
       await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
       await SunmiPrinter.printText(fechaAhora(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
-      await SunmiPrinter.lineWrap(9);
+      await SunmiPrinter.lineWrap(18);
       await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -',
           style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
       await SunmiPrinter.lineWrap(8);
@@ -376,6 +513,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _printReporte(Map payload) async {
+    if (_redMode) { await _enviarRed(_escposReporte(payload)); return; }
     await _printHeaderLogo();
     await SunmiPrinter.printText('REPORTE', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 30));
     final titulo = (payload['titulo'] ?? '').toString();
@@ -403,6 +541,18 @@ class _MainScreenState extends State<MainScreen> {
   String _clean(dynamic s) => (s ?? '').toString().replaceAll(RegExp(r'<[^>]+>'), '');
 
   Future<void> _pruebaImpresion() async {
+    if (_redMode) {
+      final b = <int>[];
+      b.addAll([0x1B, 0x40]);
+      b.addAll(_eLine('WIKEND', size: 2, bold: true));
+      b.addAll(_eLine('PRUEBA RED', size: 1, bold: true));
+      b.addAll(_eLine(widget.estacion));
+      b.addAll(_eLine(fechaAhora()));
+      b.addAll(_eFeed(2));
+      b.addAll(_eCut());
+      await _enviarRed(b);
+      return;
+    }
     try {
       await SunmiPrinter.printText(boliche, style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 40));
       await SunmiPrinter.printText('PRUEBA · ${widget.estacion}', style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 24));
@@ -412,6 +562,39 @@ class _MainScreenState extends State<MainScreen> {
     } catch (e) {
       _log('Error prueba: $e');
     }
+  }
+
+  Future<void> _configRedDialog() async {
+    final ipCtrl = TextEditingController(text: _hasarIp);
+    final portCtrl = TextEditingController(text: _hasarPort.toString());
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Impresora de red (Hasar)'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('IP vacía = usa la impresora interna del Sunmi.', style: TextStyle(fontSize: 13)),
+          const SizedBox(height: 8),
+          TextField(controller: ipCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP de la Hasar', hintText: '192.168.0.100')),
+          TextField(controller: portCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Puerto', hintText: '9100')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              final ip = ipCtrl.text.trim();
+              final port = int.tryParse(portCtrl.text.trim()) ?? 9100;
+              await prefs.setString('hasar_ip', ip);
+              await prefs.setInt('hasar_port', port);
+              setState(() { _hasarIp = ip; _hasarPort = port; });
+              if (mounted) Navigator.pop(ctx);
+              _log(_redMode ? 'Modo RED: $_hasarIp:$_hasarPort' : 'Modo interna (Sunmi)');
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _cambiarEstacion() async {
@@ -458,6 +641,11 @@ class _MainScreenState extends State<MainScreen> {
                   onPressed: () { Navigator.pop(context); _web.reload(); },
                   icon: const Icon(Icons.refresh),
                   label: const Text('Recargar'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () { Navigator.pop(context); _configRedDialog(); },
+                  icon: const Icon(Icons.print),
+                  label: Text(_redMode ? 'Impresora: RED' : 'Impresora: interna'),
                 ),
                 ElevatedButton.icon(
                   onPressed: () { Navigator.pop(context); _cambiarEstacion(); },
