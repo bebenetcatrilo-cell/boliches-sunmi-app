@@ -372,6 +372,53 @@ class _MainScreenState extends State<MainScreen> {
   List<int> _eFeed(int n) => [0x1B, 0x64, n];
   List<int> _eCut() => [0x1D, 0x56, 66, 0]; // corte parcial con avance
 
+  // Convierte el logo (imagen) al formato raster ESC/POS (para imprimir por red)
+  List<int>? _logoEscpos() {
+    if (_logoBytes == null) return null;
+    try {
+      final im = img.decodeImage(_logoBytes!);
+      if (im == null) return null;
+      int w = im.width;
+      if (w > 384) w = 384;
+      final widthBytes = (w + 7) ~/ 8;
+      final h = im.height;
+      final out = <int>[];
+      out.addAll([0x1D, 0x76, 0x30, 0x00,
+        widthBytes & 0xFF, (widthBytes >> 8) & 0xFF,
+        h & 0xFF, (h >> 8) & 0xFF]);
+      for (int y = 0; y < h; y++) {
+        for (int bx = 0; bx < widthBytes; bx++) {
+          int b = 0;
+          for (int bit = 0; bit < 8; bit++) {
+            final x = bx * 8 + bit;
+            if (x < w && x < im.width) {
+              final px = im.getPixel(x, y);
+              final lum = 0.299 * px.r + 0.587 * px.g + 0.114 * px.b;
+              if (lum < 128) b |= (0x80 >> bit);
+            }
+          }
+          out.add(b);
+        }
+      }
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Encabezado para red: logo (imagen) si está, si no el texto WIKEND
+  List<int> _headerRed() {
+    final logo = _logoEscpos();
+    if (logo != null) {
+      final b = <int>[];
+      b.addAll([0x1B, 0x61, 1]); // centrar
+      b.addAll(logo);
+      b.addAll([0x0A]);
+      return b;
+    }
+    return _eLine('WIKEND', size: 2, bold: true);
+  }
+
   List<int> _escposVenta(Map payload) {
     final tks = (payload['tks'] as List?) ?? [];
     final barra = (payload['barra'] ?? '').toString();
@@ -384,7 +431,7 @@ class _MainScreenState extends State<MainScreen> {
       final v = tks[i] as Map;
       acum += (v['precio'] is num) ? v['precio'] : (num.tryParse(v['precio'].toString()) ?? 0);
       b.addAll([0x1B, 0x40]);
-      b.addAll(_eLine('WIKEND', size: 2, bold: true));
+      b.addAll(_headerRed());
       if (evento.isNotEmpty) b.addAll(_eLine(evento, size: 1, bold: true));
       if (barra.isNotEmpty) b.addAll(_eLine(barra, size: 1));
       if (cajero.isNotEmpty) b.addAll(_eLine('CAJA: ${cajero.toUpperCase()}', size: 1, bold: true));
@@ -409,7 +456,7 @@ class _MainScreenState extends State<MainScreen> {
     for (final x in tks) {
       final v = x as Map;
       b.addAll([0x1B, 0x40]);
-      b.addAll(_eLine('WIKEND', size: 2, bold: true));
+      b.addAll(_headerRed());
       b.addAll(_eLine(titulo, size: 2, bold: true));
       if (evento.isNotEmpty) b.addAll(_eLine(evento, size: 1, bold: true));
       b.addAll(_eLine(divisor));
