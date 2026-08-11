@@ -419,6 +419,17 @@ class _MainScreenState extends State<MainScreen> {
     return _eLine('WIKEND', size: 2, bold: true);
   }
 
+  // Nombre del producto adaptado al ancho (evita desborde y que se pierda el corte)
+  List<int> _eNombre(String s) {
+    s = s.trim();
+    if (s.length <= 16) return _eLine(s, size: 2, bold: true);   // corto: grande
+    if (s.length <= 32) return _eLine(s, size: 1, bold: true);   // largo: alto normal, entra igual
+    final b = <int>[];                                            // larguísimo: dos renglones
+    b.addAll(_eLine(s.substring(0, 32), size: 1, bold: true));
+    b.addAll(_eLine(s.substring(32), size: 1, bold: true));
+    return b;
+  }
+
   List<int> _escposVenta(Map payload) {
     final tks = (payload['tks'] as List?) ?? [];
     final barra = (payload['barra'] ?? '').toString();
@@ -437,7 +448,7 @@ class _MainScreenState extends State<MainScreen> {
       if (cajero.isNotEmpty) b.addAll(_eLine('CAJA: ${cajero.toUpperCase()}', size: 1, bold: true));
       b.addAll(_eLine(divisor));
       b.addAll(_eLine('N ${v['numero'] ?? ''}   ${i + 1}/$total', size: 1, bold: true));
-      b.addAll(_eLine((v['nombre'] ?? '').toString(), size: 2, bold: true));
+      b.addAll(_eNombre((v['nombre'] ?? '').toString()));
       b.addAll(_eLine(money(v['precio']), size: 2, bold: true));
       b.addAll(_eLine(divisor));
       b.addAll(_eLine(lr('Acumulado', money(acum)), align: 0));
