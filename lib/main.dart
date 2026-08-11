@@ -183,15 +183,17 @@ class _MainScreenState extends State<MainScreen> {
   bool _ocupado = false;
   final List<String> _logs = [];
   Uint8List? _logoBytes; // logo del ticket (mismo que las Epson, guardado en Supabase)
-  String _hasarIp = '';   // IP de la Hasar de red (vacío = imprime en la interna del Sunmi)
+  String _hasarIp = '';   // IP de la Hasar de red (queda guardada aunque uses la interna)
   int _hasarPort = 9100;
-  bool get _redMode => _hasarIp.trim().isNotEmpty;
+  bool _modoRed = false;   // true = imprime por red; false = impresora interna del Sunmi
+  bool get _redMode => _modoRed && _hasarIp.trim().isNotEmpty;
 
   Future<void> _cargarConfigRed() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _hasarIp = prefs.getString('hasar_ip') ?? '';
       _hasarPort = prefs.getInt('hasar_port') ?? 9100;
+      _modoRed = prefs.getBool('modo_red') ?? false;
     });
     if (_redMode) _log('Impresión por RED activada: $_hasarIp:$_hasarPort');
   }
@@ -316,6 +318,8 @@ class _MainScreenState extends State<MainScreen> {
         final kind = (payload['kind'] ?? '').toString();
         if (kind == 'reporte') {
           await _printReporte(payload as Map);
+        } else if (kind == 'cierre_caja') {
+          await _printCierre(payload as Map);
         } else if (kind == 'entrada_qr' || kind == 'consumicion_qr') {
           await _printEntrada(payload as Map, kind);
         } else {
@@ -447,6 +451,74 @@ class _MainScreenState extends State<MainScreen> {
     return b;
   }
 
+  List<int> _escposCierre(Map payload) {
+    final b = <int>[];
+    num toNum(v) => (v is num) ? v : (num.tryParse('$v') ?? 0);
+    b.addAll([0x1B, 0x40]);
+    b.addAll(_eLine('WIKEND', size: 2, bold: true));
+    b.addAll(_eLine('CIERRE DE CAJA', size: 1, bold: true));
+    final barra = (payload['barra'] ?? '').toString();
+    if (barra.isNotEmpty) b.addAll(_eLine(barra, size: 1));
+    b.addAll(_eLine(divisor));
+    b.addAll(_eLine(lr('Fondo inicial', money(payload['inicial'])), align: 0));
+    b.addAll(_eLine(lr('Total ventas', money(payload['totalVentas'])), align: 0));
+    final porPago = (payload['porPago'] as List?) ?? [];
+    if (porPago.isNotEmpty) {
+      b.addAll(_eLine(divisor));
+      b.addAll(_eLine('POR MEDIO DE PAGO', bold: true));
+      for (final x in porPago) {
+        final m = x as Map;
+        b.addAll(_eLine(lr((m['forma'] ?? '').toString().toUpperCase(), money(m['monto'])), align: 0));
+      }
+    }
+    if (toNum(payload['ingresos']) != 0) b.addAll(_eLine(lr('Ingresos', money(payload['ingresos'])), align: 0));
+    if (toNum(payload['egresos']) != 0) b.addAll(_eLine(lr('Egresos', money(payload['egresos'])), align: 0));
+    b.addAll(_eLine(divisor));
+    b.addAll(_eLine(lr('Efectivo esperado', money(payload['efectivoEsperado'])), align: 0));
+    b.addAll(_eLine(lr('Efectivo contado', money(payload['contado'])), align: 0));
+    final dif = toNum(payload['diferencia']);
+    b.addAll(_eLine(lr(dif >= 0 ? 'Sobrante' : 'Faltante', money(dif.abs())), align: 0));
+    b.addAll(_eLine(divisor));
+    b.addAll(_eLine((payload['fecha'] ?? fechaAhora()).toString()));
+    b.addAll(_eFeed(2));
+    b.addAll(_eCut());
+    return b;
+  }
+
+  Future<void> _printCierre(Map payload) async {
+    if (_redMode) { await _enviarRed(_escposCierre(payload)); return; }
+    num toNum(v) => (v is num) ? v : (num.tryParse('$v') ?? 0);
+    await _printHeaderLogo();
+    await SunmiPrinter.printText('CIERRE DE CAJA', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 30));
+    final barra = (payload['barra'] ?? '').toString();
+    if (barra.isNotEmpty) await SunmiPrinter.printText(barra, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 24));
+    await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+    await SunmiPrinter.printText(lr('Fondo inicial', money(payload['inicial'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    await SunmiPrinter.printText(lr('Total ventas', money(payload['totalVentas'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    final porPago = (payload['porPago'] as List?) ?? [];
+    if (porPago.isNotEmpty) {
+      await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+      await SunmiPrinter.printText('POR MEDIO DE PAGO', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
+      for (final x in porPago) {
+        final m = x as Map;
+        await SunmiPrinter.printText(lr((m['forma'] ?? '').toString().toUpperCase(), money(m['monto'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+      }
+    }
+    if (toNum(payload['ingresos']) != 0) await SunmiPrinter.printText(lr('Ingresos', money(payload['ingresos'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    if (toNum(payload['egresos']) != 0) await SunmiPrinter.printText(lr('Egresos', money(payload['egresos'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+    await SunmiPrinter.printText(lr('Efectivo esperado', money(payload['efectivoEsperado'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    await SunmiPrinter.printText(lr('Efectivo contado', money(payload['contado'])), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    final dif = toNum(payload['diferencia']);
+    await SunmiPrinter.printText(lr(dif >= 0 ? 'Sobrante' : 'Faltante', money(dif.abs())), style: SunmiTextStyle(align: SunmiPrintAlign.LEFT, fontSize: 22));
+    await SunmiPrinter.printText(divisor, style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+    await SunmiPrinter.printText((payload['fecha'] ?? fechaAhora()).toString(), style: SunmiTextStyle(align: SunmiPrintAlign.CENTER, fontSize: 20));
+    await SunmiPrinter.lineWrap(9);
+    await SunmiPrinter.printText('- - - - -  CORTAR  - - - - -', style: SunmiTextStyle(bold: true, align: SunmiPrintAlign.CENTER, fontSize: 22));
+    await SunmiPrinter.lineWrap(8);
+    await SunmiPrinter.cutPaper();
+  }
+
   Future<void> _printVenta(Map payload) async {
     if (_redMode) { await _enviarRed(_escposVenta(payload)); return; }
     final tks = (payload['tks'] as List?) ?? [];
@@ -565,34 +637,68 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _configRedDialog() async {
-    final ipCtrl = TextEditingController(text: _hasarIp);
+    bool usarRed = _modoRed;
+    final ipCtrl = TextEditingController(text: _hasarIp.isNotEmpty ? _hasarIp : '192.168.0.100');
     final portCtrl = TextEditingController(text: _hasarPort.toString());
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Impresora de red (Hasar)'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('IP vacía = usa la impresora interna del Sunmi.', style: TextStyle(fontSize: 13)),
-          const SizedBox(height: 8),
-          TextField(controller: ipCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP de la Hasar', hintText: '192.168.0.100')),
-          TextField(controller: portCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Puerto', hintText: '9100')),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          FilledButton(
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              final ip = ipCtrl.text.trim();
-              final port = int.tryParse(portCtrl.text.trim()) ?? 9100;
-              await prefs.setString('hasar_ip', ip);
-              await prefs.setInt('hasar_port', port);
-              setState(() { _hasarIp = ip; _hasarPort = port; });
-              if (mounted) Navigator.pop(ctx);
-              _log(_redMode ? 'Modo RED: $_hasarIp:$_hasarPort' : 'Modo interna (Sunmi)');
-            },
-            child: const Text('Guardar'),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Impresora del ticket'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            RadioListTile<bool>(
+              value: false,
+              groupValue: usarRed,
+              onChanged: (v) => setLocal(() => usarRed = false),
+              title: const Text('Interna del Sunmi'),
+              subtitle: const Text('La del propio equipo'),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+            ),
+            RadioListTile<bool>(
+              value: true,
+              groupValue: usarRed,
+              onChanged: (v) => setLocal(() => usarRed = true),
+              title: const Text('Hasar por red (IP)'),
+              subtitle: const Text('Corta sola, más rápida'),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+            ),
+            if (usarRed)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(children: [
+                  Expanded(flex: 3, child: TextField(controller: ipCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP de la Hasar', isDense: true))),
+                  const SizedBox(width: 8),
+                  Expanded(flex: 1, child: TextField(controller: portCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Puerto', isDense: true))),
+                ]),
+              ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+            FilledButton(
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                final ip = ipCtrl.text.trim();
+                final port = int.tryParse(portCtrl.text.trim()) ?? 9100;
+                if (usarRed && ip.isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Escribí la IP de la Hasar')));
+                  return;
+                }
+                // La IP siempre queda guardada (aunque uses la interna)
+                await prefs.setString('hasar_ip', ip);
+                await prefs.setInt('hasar_port', port);
+                await prefs.setBool('modo_red', usarRed);
+                setState(() { _hasarIp = ip; _hasarPort = port; _modoRed = usarRed; });
+                if (mounted) Navigator.pop(ctx);
+                final msg = _redMode ? '✅ Ahora imprime por RED (Hasar $_hasarIp)' : '✅ Ahora imprime en la interna del Sunmi';
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+                _log(msg);
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -623,15 +729,6 @@ class _MainScreenState extends State<MainScreen> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => ScannerTarjetaScreen(estacion: widget.estacion)));
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF2E88), foregroundColor: Colors.white),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('Escanear tarjetas'),
-                ),
                 ElevatedButton.icon(
                   onPressed: () { Navigator.pop(context); _pruebaImpresion(); },
                   icon: const Icon(Icons.receipt_long),
